@@ -9,29 +9,42 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = SensorDataViewModel()
+    @State private var showSplashScreen = true
     
     var body: some View {
-        TabView {
-            // 1. 概要（起動時に最初に表示される）
-            SummaryTabView(viewModel: viewModel)
-                .tabItem {
-                    Label("概要", systemImage: "doc.text.magnifyingglass")
-                }
+        ZStack {
+            // メイン画面
+            TabView {
+                SummaryTabView(viewModel: viewModel)
+                    .tabItem { Label("概要", systemImage: "doc.text.magnifyingglass") }
+                
+                GraphTabView(viewModel: viewModel)
+                    .tabItem { Label("グラフ", systemImage: "chart.xyaxis.line") }
+                
+                HistoryTabView(viewModel: viewModel)
+                    .tabItem { Label("履歴", systemImage: "list.dash") }
+            }
+            .opacity(viewModel.isDataLoaded ? 1.0 : 0.0) // 読み込み中は透明に
             
-            // 2. グラフ
-            GraphTabView(viewModel: viewModel)
-                .tabItem {
-                    Label("グラフ", systemImage: "chart.xyaxis.line")
-                }
-            
-            // 3. 履歴
-            HistoryTabView(viewModel: viewModel)
-                .tabItem {
-                    Label("履歴", systemImage: "list.dash")
-                }
+            // スプラッシュ画面（前面に重ねる）
+            if showSplashScreen {
+                SplashView()
+                    .transition(.opacity.animation(.easeInOut(duration: 0.5)))
+                    .zIndex(1)
+            }
         }
         .task {
             await viewModel.startFetching()
+        }
+        .onReceive(viewModel.$isDataLoaded) { isLoaded in
+            if isLoaded {
+                // 読み込み完了後、0.5秒待ってからアニメーション付きで消す
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation {
+                        showSplashScreen = false
+                    }
+                }
+            }
         }
     }
 }
