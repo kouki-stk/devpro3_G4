@@ -8,7 +8,8 @@
 import Foundation
 import SwiftUI
 import Combine
-import ActivityKit // 💡 ライブアクティビティ制御のために追加
+import ActivityKit
+import WidgetKit // 💡 ウィジェットリフレッシュのために追加
 
 public enum GraphRange: String, CaseIterable, Sendable {
     case day = "時", week = "週", month = "月", sixMonths = "6か月", year = "年"
@@ -39,6 +40,7 @@ public struct StatData: Identifiable, @unchecked Sendable {
 
 @MainActor
 public class SensorDataViewModel: ObservableObject {
+    @Published public var allRawData: [SensorData] = []
     @Published public var statsDay: [StatData] = []
     @Published public var statsWeek: [StatData] = []
     @Published public var statsMonth: [StatData] = []
@@ -47,12 +49,11 @@ public class SensorDataViewModel: ObservableObject {
     @Published public var isCalculatingStats: Bool = false
     @Published public var isDataLoaded: Bool = false
     
-    // 起動中のライブアクティビティを管理する変数
     private var currentActivity: Activity<SensorActivityAttributes>?
     
     public func startFetching() async {
         guard !isCalculatingStats && !isDataLoaded else { return }
-        guard let url = URL(string: "http://192.168.1.40:5001/api/data") else { return }
+        guard let url = URL(string: "http://10.192.133.141:5001/api/data") else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let decoder = JSONDecoder()
@@ -65,6 +66,7 @@ public class SensorDataViewModel: ObservableObject {
             }
             let fetched = try decoder.decode([SensorData].self, from: data).sorted { $0.timestamp < $1.timestamp }
             
+            self.allRawData = fetched
             self.isCalculatingStats = true
             let cal = Calendar.current
             
@@ -87,36 +89,27 @@ public class SensorDataViewModel: ObservableObject {
             self.isCalculatingStats = false
             self.isDataLoaded = true
             
-            // ▼ 追加：最新データが取れたらライブアクティビティを起動・更新する
             if let latestData = fetched.last {
                 updateLiveActivity(latest: latestData)
             }
             
+            // ▼ 追加：メインアプリのデータ更新完了をホーム画面ウィジェットへ通知して強制リフレッシュ！
+            WidgetCenter.shared.reloadAllTimelines()
+            
         } catch { print("Fetch error: \(error)") }
     }
     
-    // ▼ 追加：ライブアクティビティの開始・更新ロジック
     private func updateLiveActivity(latest: SensorData) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        
-        let state = SensorActivityAttributes.ContentState(
-            temperature: latest.temperature,
-            humidity: latest.humidity,
-            updateTime: latest.timestamp
-        )
+        let state = SensorActivityAttributes.ContentState(temperature: latest.temperature, humidity: latest.humidity, updateTime: latest.timestamp)
         let content = ActivityContent(state: state, staleDate: nil)
-        
         if let activity = currentActivity {
-            // すでに島やロック画面に出ていればデータを最新にする（パラパラ数字アニメーションが発動）
             Task { await activity.update(content) }
         } else {
-            // アプリ起動時に新しくアクティビティをリクエストする
             do {
                 let attributes = SensorActivityAttributes()
                 currentActivity = try Activity.request(attributes: attributes, content: content, pushType: nil)
-            } catch {
-                print("Live Activity Error: \(error.localizedDescription)")
-            }
+            } catch { print("Live Activity Error: \(error.localizedDescription)") }
         }
     }
     

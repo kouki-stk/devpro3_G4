@@ -10,47 +10,62 @@ import SwiftUI
 struct SummaryTabView: View {
     @ObservedObject var viewModel: SensorDataViewModel
     
+    // 本日の最高・最低を計算
+    private var todayHighLow: (maxT: Double, minT: Double, maxH: Double, minH: Double)? {
+        let cal = Calendar.current
+        let todayData = viewModel.allRawData.filter { cal.isDateInToday($0.timestamp) }
+        guard !todayData.isEmpty else { return nil }
+        let temps = todayData.map { $0.temperature }
+        let hums = todayData.map { $0.humidity }
+        return (temps.max() ?? 0, temps.min() ?? 0, hums.max() ?? 0, hums.min() ?? 0)
+    }
+    
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 22) {
                     
-                    // 最新のデータカード
-                    if let latest = viewModel.statsDay.last {
-                        Text("最新の状況").font(.title2).bold().padding(.horizontal)
+                    // 1. 最新の状況
+                    if let latest = viewModel.allRawData.last {
+                        Text("最新の状況").font(.headline).foregroundColor(.secondary).padding(.horizontal)
                         
                         HStack(spacing: 15) {
-                            SummaryCard(title: "気温", value: String(format: "%.1f", latest.avgTemp), unit: "℃", color: .red, icon: "thermometer.medium")
-                            SummaryCard(title: "湿度", value: String(format: "%.0f", latest.avgHum), unit: "%", color: .blue, icon: "drop.fill")
+                            SummaryCard(title: "気温", value: String(format: "%.1f", latest.temperature), unit: "℃", color: .red, icon: "thermometer.medium")
+                            SummaryCard(title: "湿度", value: String(format: "%.0f", latest.humidity), unit: "%", color: .blue, icon: "drop.fill")
                         }
                         .padding(.horizontal)
                     }
                     
-                    // 各期間のサマリーセクション
-                    Text("期間別サマリー").font(.title2).bold().padding(.horizontal).padding(.top, 10)
+                    // 2. 本日のハイライト (最高・最低)
+                    Text("本日のハイライト").font(.headline).foregroundColor(.secondary).padding(.horizontal).padding(.top, 10)
                     
-                    VStack(spacing: 12) {
-                        ForEach(GraphRange.allCases.filter { $0 != .day }, id: \.self) { range in
-                            NavigationLink(destination: HistoryDetailView(viewModel: viewModel, range: range)) {
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(range.rawValue).font(.headline).foregroundColor(.primary)
-                                        let stats = viewModel.getStats(for: range)
-                                        if let last = stats.last {
-                                            Text("最終更新: \(last.date.formatted(date: .abbreviated, time: .omitted))")
-                                                .font(.caption).foregroundColor(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
-                                }
-                                .padding()
-                                .background(Color(UIColor.secondarySystemGroupedBackground))
-                                .cornerRadius(12)
-                            }
+                    if let hl = todayHighLow {
+                        VStack(spacing: 12) {
+                            HighlightRow(title: "気温の範囲", minV: hl.minT, maxV: hl.maxT, unit: "℃", color: .red)
+                            HighlightRow(title: "湿度の範囲", minV: hl.minH, maxV: hl.maxH, unit: "%", color: .blue)
                         }
+                        .padding(.horizontal)
+                    } else {
+                        Text("本日のデータはまだありません")
+                            .font(.subheadline).foregroundColor(.secondary).padding(.horizontal)
                     }
-                    .padding(.horizontal)
+                    
+                    // 3. 環境インサイト（静かなUIアドバイス）
+                    if let latest = viewModel.allRawData.last {
+                        Text("環境インサイト").font(.headline).foregroundColor(.secondary).padding(.horizontal).padding(.top, 10)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(getInsightMessage(temp: latest.temperature, hum: latest.humidity))
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                                .lineSpacing(4)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                    }
                 }
                 .padding(.vertical)
             }
@@ -58,9 +73,17 @@ struct SummaryTabView: View {
             .background(Color(UIColor.systemGroupedBackground))
         }
     }
+    
+    private func getInsightMessage(temp: Double, hum: Double) -> String {
+        if temp >= 27.0 { return "室温がやや高めになっています。熱中症防止のため、適切なエアコンの使用や水分補給を検討してください。" }
+        if temp < 20.0 { return "室温が下がっています。体調管理のため、暖房の調節や暖かい衣服での調整をおすすめします。" }
+        if hum < 40.0 { return "空気が乾燥しています。喉や皮膚の乾燥対策として、加湿器の使用を検討してください。" }
+        if hum >= 70.0 { return "湿度がかなり高くなっています。カビの発生を抑えるため、換気や除湿を行ってください。" }
+        return "現在の温湿度は非常に快適なバランスに保たれています。この状態を維持するのが理想的です。"
+    }
 }
 
-// 概要用カード部品
+// ▼ ここから下が欠落してエラーになっていました！復活させています。
 struct SummaryCard: View {
     let title: String; let value: String; let unit: String; let color: Color; let icon: String
     var body: some View {
@@ -79,5 +102,21 @@ struct SummaryCard: View {
         .background(Color(UIColor.secondarySystemGroupedBackground))
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)
+    }
+}
+
+struct HighlightRow: View {
+    let title: String; let minV: Double; let maxV: Double; let unit: String; let color: Color
+    var body: some View {
+        HStack {
+            Text(title).font(.body).fontWeight(.medium)
+            Spacer()
+            Text(String(format: "%.1f", minV)).foregroundColor(.secondary)
+            Text("–")
+            Text(String(format: "%.1f%@", maxV, unit)).bold().foregroundColor(color)
+        }
+        .padding()
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .cornerRadius(12)
     }
 }
