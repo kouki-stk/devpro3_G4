@@ -7,42 +7,50 @@
 
 import SwiftUI
 
+enum AppStep {
+    case splash
+    case ipSetup
+    case mainUI
+}
+
 struct ContentView: View {
     @StateObject private var viewModel = SensorDataViewModel()
-    @State private var showSplashScreen = true
+    @State private var currentStep: AppStep = .splash
     
     var body: some View {
         ZStack {
-            // メイン画面
-            TabView {
-                SummaryTabView(viewModel: viewModel)
-                    .tabItem { Label("概要", systemImage: "doc.text.magnifyingglass") }
-                
-                GraphTabView(viewModel: viewModel)
-                    .tabItem { Label("グラフ", systemImage: "chart.xyaxis.line") }
-                
-                HistoryTabView(viewModel: viewModel)
-                    .tabItem { Label("履歴", systemImage: "list.dash") }
-            }
-            .opacity(viewModel.isDataLoaded ? 1.0 : 0.0) // 読み込み中は透明に
-            
-            // スプラッシュ画面（前面に重ねる）
-            if showSplashScreen {
+            switch currentStep {
+            case .splash:
                 SplashView()
-                    .transition(.opacity.animation(.easeInOut(duration: 0.5)))
-                    .zIndex(1)
-            }
-        }
-        .task {
-            await viewModel.startFetching()
-        }
-        .onReceive(viewModel.$isDataLoaded) { isLoaded in
-            if isLoaded {
-                // 読み込み完了後、0.5秒待ってからアニメーション付きで消す
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    withAnimation {
-                        showSplashScreen = false
+                    .onAppear {
+                        // スプラッシュのアニメーション時間を確保してからIP入力画面へ
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            withAnimation(.easeOut(duration: 0.4)) {
+                                currentStep = .ipSetup
+                            }
+                        }
                     }
+                    
+            case .ipSetup:
+                IPSetupView(viewModel: viewModel, currentStep: $currentStep)
+                
+            case .mainUI:
+                // ▼ ここを修正：元の正しいタブアイコン「thermometer.sun」に戻しました！
+                TabView {
+                    SummaryTabView(viewModel: viewModel)
+                        .tabItem {
+                            Label("概要", systemImage: "thermometer.sun")
+                        }
+                    
+                    GraphTabView(viewModel: viewModel)
+                        .tabItem {
+                            Label("グラフ", systemImage: "chart.xyaxis.line")
+                        }
+                    
+                    HistoryTabView(viewModel: viewModel)
+                        .tabItem {
+                            Label("履歴", systemImage: "clock.arrow.circlepath")
+                        }
                 }
             }
         }

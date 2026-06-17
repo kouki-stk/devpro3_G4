@@ -9,7 +9,7 @@ import Foundation
 import SwiftUI
 import Combine
 import ActivityKit
-import WidgetKit // 💡 ウィジェットリフレッシュのために追加
+import WidgetKit
 
 public enum GraphRange: String, CaseIterable, Sendable {
     case day = "時", week = "週", month = "月", sixMonths = "6か月", year = "年"
@@ -52,8 +52,11 @@ public class SensorDataViewModel: ObservableObject {
     private var currentActivity: Activity<SensorActivityAttributes>?
     
     public func startFetching() async {
-        guard !isCalculatingStats && !isDataLoaded else { return }
-        guard let url = URL(string: "http://10.192.133.141:5001/api/data") else { return }
+        // ▼ 修正：保存された動的IPアドレスを取得、なければ通信スキップ
+        guard let savedIP = UserDefaults.standard.string(forKey: "saved_flask_ip"), !savedIP.isEmpty else { return }
+        guard let url = URL(string: "http://\(savedIP):5001/api/data") else { return }
+        
+        self.isCalculatingStats = true
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let decoder = JSONDecoder()
@@ -67,7 +70,6 @@ public class SensorDataViewModel: ObservableObject {
             let fetched = try decoder.decode([SensorData].self, from: data).sorted { $0.timestamp < $1.timestamp }
             
             self.allRawData = fetched
-            self.isCalculatingStats = true
             let cal = Calendar.current
             
             let results = await Task.detached(priority: .userInitiated) {
@@ -93,10 +95,13 @@ public class SensorDataViewModel: ObservableObject {
                 updateLiveActivity(latest: latestData)
             }
             
-            // ▼ 追加：メインアプリのデータ更新完了をホーム画面ウィジェットへ通知して強制リフレッシュ！
             WidgetCenter.shared.reloadAllTimelines()
             
-        } catch { print("Fetch error: \(error)") }
+        } catch {
+            print("Fetch error: \(error)")
+            self.isCalculatingStats = false
+            self.isDataLoaded = false // エラー時はフラグを落として入力画面側へ失敗を伝える
+        }
     }
     
     private func updateLiveActivity(latest: SensorData) {
