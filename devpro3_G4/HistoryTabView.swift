@@ -10,12 +10,9 @@ import SwiftUI
 struct HistoryTabView: View {
     @ObservedObject var viewModel: SensorDataViewModel
     
-    // カレンダーで選択された日付（デフォルトは今日）
     @State private var selectedDate = Date()
-    // カレンダーのポップアップを表示するかどうかの管理フラグ
     @State private var showDatePicker = false
     
-    // 選択された日付のデータを抽出し、新→古（降順）にソート
     private var filteredRows: [SensorData] {
         let cal = Calendar.current
         return viewModel.allRawData.filter { item in
@@ -25,50 +22,49 @@ struct HistoryTabView: View {
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                
-                // --- カレンダー選択セクション ---
-                HStack {
-                    // タップするとカレンダーが展開する文字だけのボタン
-                    Button(action: { showDatePicker.toggle() }) {
-                        HStack(spacing: 6) {
-                            Text(formatSelectedDate(selectedDate))
-                                .font(.system(.title3, design: .rounded))
-                                .fontWeight(.semibold)
-                                .monospacedDigit()
-                                .foregroundColor(.primary)
-                            
-                            Image(systemName: "chevron.down")
-                                .font(.subheadline)
-                                .fontWeight(.bold)
-                                .foregroundColor(.secondary)
+            // ▼ 修正：VStackを廃止し、全体をListで包むことでタイトルの重なりを防止！
+            List {
+                // --- 1行目：カレンダー選択（背景を透明にして浮かせる） ---
+                Section {
+                    HStack {
+                        Button(action: { showDatePicker.toggle() }) {
+                            HStack(spacing: 6) {
+                                Text(formatSelectedDate(selectedDate))
+                                    .font(.system(.title3, design: .rounded))
+                                    .fontWeight(.semibold)
+                                    .monospacedDigit()
+                                    .foregroundColor(.primary)
+                                
+                                Image(systemName: "chevron.down")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
+                        .popover(isPresented: $showDatePicker) {
+                            DatePicker(
+                                "",
+                                selection: $selectedDate,
+                                displayedComponents: .date
+                            )
+                            .datePickerStyle(.graphical)
+                            .labelsHidden()
+                            .environment(\.locale, Locale(identifier: "ja_JP"))
+                            .environment(\.calendar, Calendar(identifier: .gregorian))
+                            .frame(width: 320)
+                            .presentationCompactAdaptation(.popover)
+                            .padding()
+                        }
+                        
+                        Spacer()
                     }
-                    // ∨を押したときに表示されるポップアップカレンダーの設定
-                    .popover(isPresented: $showDatePicker) {
-                        DatePicker(
-                            "",
-                            selection: $selectedDate,
-                            displayedComponents: .date
-                        )
-                        .datePickerStyle(.graphical)
-                        .labelsHidden()
-                        .environment(\.locale, Locale(identifier: "ja_JP"))
-                        .environment(\.calendar, Calendar(identifier: .gregorian))
-                        // ▼ 修正の核心：カレンダーが細く潰れないように、明示的に横幅(320)を指定！
-                        .frame(width: 320)
-                        .presentationCompactAdaptation(.popover)
-                        .padding()
-                    }
-                    
-                    Spacer()
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                .background(Color(UIColor.systemGroupedBackground))
+                .listRowBackground(Color.clear) // セル特有の背景を消して自然に配置
+                .listRowInsets(EdgeInsets(top: 10, leading: 4, bottom: 10, trailing: 0))
+                .listRowSeparator(.hidden)
                 
-                // --- 履歴リストセクション ---
+                // --- 2行目以降：履歴リスト ---
                 if filteredRows.isEmpty {
                     VStack {
                         Spacer()
@@ -78,43 +74,39 @@ struct HistoryTabView: View {
                         Spacer()
                     }
                     .frame(maxWidth: .infinity)
-                    .background(Color(UIColor.systemGroupedBackground))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
                 } else {
-                    List {
-                        Section(header: Text("\(filteredRows.count) 件のデータ (新しい順)")) {
-                            ForEach(filteredRows) { row in
-                                HStack {
-                                    // 時間
-                                    Text(row.timestamp.formatted(.dateTime.hour().minute().second()))
+                    Section(header: Text("\(filteredRows.count) 件のデータ (新しい順)")) {
+                        ForEach(filteredRows) { row in
+                            HStack {
+                                Text(row.timestamp.formatted(.dateTime.hour().minute().second()))
+                                    .font(.body.monospacedDigit())
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 80, alignment: .leading)
+                                
+                                Spacer()
+                                
+                                HStack(spacing: 4) {
+                                    Image(systemName: "thermometer.medium").foregroundColor(.red)
+                                    Text(String(format: "%.1f℃", row.temperature))
                                         .font(.body.monospacedDigit())
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 80, alignment: .leading)
-                                    
-                                    Spacer()
-                                    
-                                    // 気温
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "thermometer.medium").foregroundColor(.red)
-                                        Text(String(format: "%.1f℃", row.temperature))
-                                            .font(.body.monospacedDigit())
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    // 湿度
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "drop.fill").foregroundColor(.blue)
-                                        Text(String(format: "%.0f%%", row.humidity))
-                                            .font(.body.monospacedDigit())
-                                    }
                                 }
-                                .padding(.vertical, 2)
+                                
+                                Spacer()
+                                
+                                HStack(spacing: 4) {
+                                    Image(systemName: "drop.fill").foregroundColor(.blue)
+                                    Text(String(format: "%.0f%%", row.humidity))
+                                        .font(.body.monospacedDigit())
+                                }
                             }
+                            .padding(.vertical, 2)
                         }
                     }
-                    .listStyle(.insetGrouped)
                 }
             }
+            .listStyle(.insetGrouped) // 純正アプリライクな美しいリスト構造
             .navigationTitle("履歴")
         }
     }

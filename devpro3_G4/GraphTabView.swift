@@ -12,8 +12,6 @@ struct GraphTabView: View {
     @ObservedObject var viewModel: SensorDataViewModel
     @State private var selectedRange: GraphRange = .day
     
-    // ▼ 修正：ここで宣言していた `@State private var scrollPosition` を削除しました
-    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -35,28 +33,23 @@ struct GraphTabView: View {
                         HealthStyleChart(
                             title: "気温", unit: "℃", color: .red,
                             data: chartData, range: selectedRange, isTemperature: true
-                            // ▼ 修正：引数としての scrollPosition を削除しました
                         )
                         
                         HealthStyleChart(
                             title: "湿度", unit: "%", color: .blue,
                             data: chartData, range: selectedRange, isTemperature: false
-                            // ▼ 修正：引数としての scrollPosition を削除しました
                         )
                     }
                 }
             }
             .navigationTitle("グラフ")
             .background(Color(UIColor.systemGroupedBackground))
-            // ▼ 修正：.onChange と .onAppear も不要になったので削除しました（超軽量化！）
         }
     }
 }
 
 struct HealthStyleChart: View {
     let title: String; let unit: String; let color: Color; let data: [StatData]; let range: GraphRange; let isTemperature: Bool
-    
-    // ▼ 修正：ここで宣言していた `@Binding var scrollPosition` を削除しました
     @State private var selectedDate: Date?
     
     var currentStat: StatData? {
@@ -68,6 +61,7 @@ struct HealthStyleChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            
             if let stat = currentStat {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(range == .day ? title : "範囲").font(.caption).foregroundColor(.secondary).bold()
@@ -89,21 +83,35 @@ struct HealthStyleChart: View {
                 .padding([.horizontal, .top])
             }
             
-            Chart {
-                ForEach(data) { item in
-                    let minV = isTemperature ? item.minTemp : item.minHum
-                    let maxV = isTemperature ? item.maxTemp : item.maxHum
-                    let avgV = isTemperature ? item.avgTemp : item.avgHum
-                    
-                    if range == .day {
-                        PointMark(x: .value("時", item.date), y: .value(title, avgV)).symbolSize(30).foregroundStyle(color)
-                    } else {
-                        BarMark(x: .value("日", item.date), yStart: .value("低", minV), yEnd: .value("高", maxV), width: range == .year ? .fixed(15) : .fixed(8))
-                            .foregroundStyle(color.gradient).clipShape(Capsule())
-                    }
+            // ▼ 修正：Apple推奨の「Chart(data)」構文に変更！これで数万件でも爆速化します。
+            Chart(data) { item in
+                let minV = isTemperature ? item.minTemp : item.minHum
+                let maxV = isTemperature ? item.maxTemp : item.maxHum
+                let avgV = isTemperature ? item.avgTemp : item.avgHum
+                
+                if range == .day {
+                    PointMark(x: .value("時", item.date), y: .value(title, avgV))
+                        .foregroundStyle(color)
+                } else {
+                    BarMark(x: .value("日", item.date), yStart: .value("低", minV), yEnd: .value("高", maxV))
+                        .foregroundStyle(color.gradient)
+                        .clipShape(Capsule())
                 }
-                if let selectedDate {
-                    RuleMark(x: .value("選択", selectedDate)).foregroundStyle(.secondary.opacity(0.3))
+            }
+            // 選択時の縦線オーバーレイ
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    let x = value.location.x - geometry[proxy.plotAreaFrame].origin.x
+                                    if let date: Date = proxy.value(atX: x) {
+                                        selectedDate = date
+                                    }
+                                }
+                                .onEnded { _ in selectedDate = nil }
+                        )
                 }
             }
             .chartXAxis {
@@ -116,15 +124,10 @@ struct HealthStyleChart: View {
                     }
                 }
             }
-            .chartXSelection(value: $selectedDate)
+            // .chartXSelection は重いため自前の chartOverlay に置き換え、.id(range)も排除して劇的に軽量化
             .chartScrollableAxes(.horizontal)
-            // 🌟 超重要修正ポイント 🌟
-            // 変数で監視するのをやめ、シンプルに「最新のデータ（一番右）」を初期位置に設定！
             .chartScrollPosition(initialX: data.last?.date ?? Date())
             .chartXVisibleDomain(length: range.seconds * (range == .day ? 24 : range == .week ? 7 : range == .month ? 30 : range == .sixMonths ? 26 : 12))
-            // 🌟 魔法のコード 🌟
-            // ピッカー（時・週・月）を切り替えた瞬間に、グラフをリセットして再び最新位置へ移動させる
-            .id(range)
             .frame(height: 220)
             .padding()
         }
@@ -136,12 +139,9 @@ struct HealthStyleChart: View {
     private func formatAxisDate(_ date: Date, for range: GraphRange) -> String {
         let f = DateFormatter(); f.locale = Locale(identifier: "ja_JP")
         let comp = Calendar.current.dateComponents([.month, .day, .hour], from: date)
-        
-        // 1月1日（年の境界）なら、必ず西暦を表示する
         if comp.month == 1 && comp.day == 1 && (comp.hour ?? 0) < 12 {
             return date.formatted(.dateTime.year())
         }
-        
         switch range {
         case .day: f.dateFormat = "HH:mm"
         case .week, .month: f.dateFormat = "M/d"
