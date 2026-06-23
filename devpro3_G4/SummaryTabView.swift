@@ -6,9 +6,13 @@
 //
 
 import SwiftUI
+import CoreImage.CIFilterBuiltins
 
 struct SummaryTabView: View {
     @ObservedObject var viewModel: SensorDataViewModel
+    
+    // QRコード画面を表示するためのフラグ
+    @State private var showQRSheet = false
     
     // 本日の最高・最低を計算
     private var todayHighLow: (maxT: Double, minT: Double, maxH: Double, minH: Double)? {
@@ -25,19 +29,26 @@ struct SummaryTabView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     
-                    // 1. 最新の状況
+                    // --- 1. 最新の状況 ---
                     if let latest = viewModel.allRawData.last {
-                        Text("最新の状況").font(.headline).foregroundColor(.secondary).padding(.horizontal)
+                        Text("最新の状況")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
                         
                         HStack(spacing: 15) {
-                            SummaryCard(title: "気温", value: String(format: "%.1f", latest.temperature), unit: "℃", color: .red, icon: "thermometer.medium")
-                            SummaryCard(title: "湿度", value: String(format: "%.0f", latest.humidity), unit: "%", color: .blue, icon: "drop.fill")
+                            SummaryCard(title: "気温", value: String(format: "%.1f", latest.temperature), unit: "℃", color: .red, icon: "thermometer.sun")
+                            SummaryCard(title: "湿度", value: String(format: "%.0f", latest.humidity), unit: "%", color: .blue, icon: "humidity")
                         }
                         .padding(.horizontal)
                     }
                     
-                    // 2. 本日のハイライト (最高・最低)
-                    Text("本日のハイライト").font(.headline).foregroundColor(.secondary).padding(.horizontal).padding(.top, 10)
+                    // --- 2. 本日のハイライト (最高・最低) ---
+                    Text("本日のハイライト")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                        .padding(.top, 10)
                     
                     if let hl = todayHighLow {
                         VStack(spacing: 12) {
@@ -47,12 +58,18 @@ struct SummaryTabView: View {
                         .padding(.horizontal)
                     } else {
                         Text("本日のデータはまだありません")
-                            .font(.subheadline).foregroundColor(.secondary).padding(.horizontal)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
                     }
                     
-                    // 3. 環境インサイト（静かなUIアドバイス）
+                    // --- 3. 環境インサイト ---
                     if let latest = viewModel.allRawData.last {
-                        Text("環境インサイト").font(.headline).foregroundColor(.secondary).padding(.horizontal).padding(.top, 10)
+                        Text("環境インサイト")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                            .padding(.top, 10)
                         
                         VStack(alignment: .leading, spacing: 8) {
                             Text(getInsightMessage(temp: latest.temperature, hum: latest.humidity))
@@ -71,6 +88,23 @@ struct SummaryTabView: View {
             }
             .navigationTitle("概要")
             .background(Color(UIColor.systemGroupedBackground))
+            // ナビゲーションバーの右上にボタンを配置
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { showQRSheet = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "qrcode")
+                            Text("サーバーQR")
+                        }
+                        .font(.body)
+                        .fontWeight(.medium)
+                    }
+                }
+            }
+            // ボタンを押した時に下からQRコード画面を出す
+            .sheet(isPresented: $showQRSheet) {
+                ServerQRSheetView()
+            }
         }
     }
     
@@ -83,7 +117,7 @@ struct SummaryTabView: View {
     }
 }
 
-// ▼ ここから下が欠落してエラーになっていました！復活させています。
+// MARK: - 既存のカードUIコンポーネント
 struct SummaryCard: View {
     let title: String; let value: String; let unit: String; let color: Color; let icon: String
     var body: some View {
@@ -105,6 +139,7 @@ struct SummaryCard: View {
     }
 }
 
+// MARK: - 既存のハイライトUIコンポーネント
 struct HighlightRow: View {
     let title: String; let minV: Double; let maxV: Double; let unit: String; let color: Color
     var body: some View {
@@ -118,5 +153,85 @@ struct HighlightRow: View {
         .padding()
         .background(Color(UIColor.secondarySystemGroupedBackground))
         .cornerRadius(12)
+    }
+}
+
+// MARK: - サーバーIPのQRコードを表示するシート画面
+struct ServerQRSheetView: View {
+    @Environment(\.dismiss) var dismiss
+    // UserDefaultsから現在接続中のIPを取得
+    @AppStorage("saved_flask_ip") private var savedIP: String = ""
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                if savedIP.isEmpty {
+                    Text("IPアドレスが保存されていません")
+                        .foregroundColor(.secondary)
+                } else {
+                    VStack(spacing: 8) {
+                        Text("現在のサーバーIP")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text(savedIP)
+                            .font(.system(.title2, design: .rounded))
+                            .bold()
+                    }
+                    
+                    // QRコードの表示
+                    Image(uiImage: generateQRCode(from: savedIP))
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 200, height: 200)
+                        .padding(16)
+                        .background(Color.white)
+                        .cornerRadius(20)
+                        .shadow(color: .black.opacity(0.08), radius: 15, x: 0, y: 8)
+                    
+                    Text("このQRコードを他の端末でスキャンすると、\n同じサーバーに素早く接続できます。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        // 文字が「…」と省略されるのを防ぐ
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .background(Color(UIColor.systemGroupedBackground))
+            .navigationTitle("サーバーQR")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("閉じる") {
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        // ハーフモーダルとして表示（画面の半分、または少し大きめ）
+        .presentationDetents([.medium, .fraction(0.6)])
+    }
+    
+    // 文字列をQRコードの画像に変換するメソッド
+    private func generateQRCode(from string: String) -> UIImage {
+        let context = CIContext()
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(string.utf8)
+        
+        if let outputImage = filter.outputImage {
+            // QRコードの解像度を上げて鮮明にする
+            let transform = CGAffineTransform(scaleX: 10, y: 10)
+            let scaledImage = outputImage.transformed(by: transform)
+            
+            if let cgimg = context.createCGImage(scaledImage, from: scaledImage.extent) {
+                return UIImage(cgImage: cgimg)
+            }
+        }
+        return UIImage(systemName: "xmark.circle") ?? UIImage()
     }
 }

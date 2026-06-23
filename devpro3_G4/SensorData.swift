@@ -12,7 +12,6 @@ import ActivityKit
 import WidgetKit
 
 public enum GraphRange: String, CaseIterable, Sendable {
-    // 👈 「時」から「日」へ変更
     case day = "日", week = "週", month = "月", sixMonths = "6か月", year = "年"
     public var seconds: Double {
         switch self {
