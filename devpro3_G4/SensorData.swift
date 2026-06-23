@@ -12,7 +12,8 @@ import ActivityKit
 import WidgetKit
 
 public enum GraphRange: String, CaseIterable, Sendable {
-    case day = "時", week = "週", month = "月", sixMonths = "6か月", year = "年"
+    // 👈 「時」から「日」へ変更
+    case day = "日", week = "週", month = "月", sixMonths = "6か月", year = "年"
     public var seconds: Double {
         switch self {
         case .day: return 3600
@@ -31,7 +32,7 @@ public struct SensorData: Codable, Identifiable, Equatable, @unchecked Sendable 
     public let humidity: Double
 }
 
-public struct StatData: Identifiable, @unchecked Sendable {
+public struct StatData: Identifiable, Equatable, @unchecked Sendable {
     public let id = UUID()
     public let date: Date
     public let minTemp: Double, maxTemp: Double, avgTemp: Double
@@ -52,7 +53,6 @@ public class SensorDataViewModel: ObservableObject {
     private var currentActivity: Activity<SensorActivityAttributes>?
     
     public func startFetching() async {
-        // ▼ 修正：保存された動的IPアドレスを取得、なければ通信スキップ
         guard let savedIP = UserDefaults.standard.string(forKey: "saved_flask_ip"), !savedIP.isEmpty else { return }
         guard let url = URL(string: "http://\(savedIP):5001/api/data") else { return }
         
@@ -100,7 +100,7 @@ public class SensorDataViewModel: ObservableObject {
         } catch {
             print("Fetch error: \(error)")
             self.isCalculatingStats = false
-            self.isDataLoaded = false // エラー時はフラグを落として入力画面側へ失敗を伝える
+            self.isDataLoaded = false
         }
     }
     
