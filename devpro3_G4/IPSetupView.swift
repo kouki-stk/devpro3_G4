@@ -66,7 +66,7 @@ struct IPSetupView: View {
                             .padding(.vertical, 4)
                         
                         // 2段目：QRスキャンボタン
-                        Button(action: { isShowingQRScanner = true }) {
+                        Button(action: authenticateForQRScanner) {
                             HStack(spacing: 8) {
                                 Image(systemName: "qrcode.viewfinder")
                                     .font(.title2)
@@ -144,6 +144,9 @@ struct IPSetupView: View {
                     self.connectToServer(ip: ip)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("InvalidQRCode"))) { _ in
+                self.errorMessage = "このQRコードはdevpro3_G4専用形式ではありません"
+            }
             .onAppear { loadHistory() }
         }
     }
@@ -175,6 +178,26 @@ struct IPSetupView: View {
             }
         } else {
             showHistoryScreen = true
+        }
+    }
+    
+    private func authenticateForQRScanner() {
+        let context = LAContext()
+        var authError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError) else {
+            errorMessage = "Face ID / Touch IDを有効にするとQRスキャンを利用できます"
+            return
+        }
+        
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "QRスキャナーを起動します") { success, _ in
+            DispatchQueue.main.async {
+                if success {
+                    errorMessage = nil
+                    isShowingQRScanner = true
+                } else {
+                    errorMessage = "Face ID / Touch IDで認証できませんでした"
+                }
+            }
         }
     }
     
@@ -238,9 +261,13 @@ struct QRScannerView: UIViewControllerRepresentable {
         var parent: QRScannerView
         init(_ parent: QRScannerView) { self.parent = parent }
         func didFindCode(_ code: String) {
-            parent.scannedCode = code
             parent.dismiss()
-            NotificationCenter.default.post(name: NSNotification.Name("AutoConnectIP"), object: code)
+            guard let decodedIP = QRCrypto.decryptIP(code) else {
+                NotificationCenter.default.post(name: NSNotification.Name("InvalidQRCode"), object: nil)
+                return
+            }
+            parent.scannedCode = decodedIP
+            NotificationCenter.default.post(name: NSNotification.Name("AutoConnectIP"), object: decodedIP)
         }
     }
 }

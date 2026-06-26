@@ -24,39 +24,43 @@ struct GraphTabView: View {
                     .pickerStyle(.segmented)
                     .padding()
                     
-                    if viewModel.isCalculatingStats {
-                        ProgressView("集計中...")
-                            .frame(minHeight: 300)
-                    } else {
-                        let chartData = viewModel.getStats(for: selectedRange)
-                        
-                        HealthStyleChart(
-                            title: "気温", unit: "℃", color: .red,
-                            data: chartData, range: selectedRange, isTemperature: true
-                        )
-                        
-                        HealthStyleChart(
-                            title: "湿度", unit: "%", color: .blue,
-                            data: chartData, range: selectedRange, isTemperature: false
-                        )
-                    }
+                    let payload = viewModel.getChartPayload(for: selectedRange)
+                    
+                    HealthStyleChart(
+                        title: "気温", unit: "℃", color: .red,
+                        payload: payload, range: selectedRange, isTemperature: true
+                    )
+                    
+                    HealthStyleChart(
+                        title: "湿度", unit: "%", color: .blue,
+                        payload: payload, range: selectedRange, isTemperature: false
+                    )
                 }
             }
             .navigationTitle("グラフ")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if viewModel.isCalculatingStats {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
             .background(Color(UIColor.systemGroupedBackground))
         }
     }
 }
 
 struct HealthStyleChart: View {
-    let title: String; let unit: String; let color: Color; let data: [StatData]; let range: GraphRange; let isTemperature: Bool
+    let title: String; let unit: String; let color: Color; let payload: GraphChartPayload; let range: GraphRange; let isTemperature: Bool
     
     @State private var selectedDate: Date?
     
-    private var totalAverage: Double {
-        guard !data.isEmpty else { return 0 }
-        let total = data.map { isTemperature ? $0.avgTemp : $0.avgHum }.reduce(0, +)
-        return total / Double(data.count)
+    private var data: [StatData] { payload.data }
+    private var totalAverage: Double { isTemperature ? payload.temperatureAverage : payload.humidityAverage }
+    private var xDomain: ClosedRange<Date> {
+        let end = payload.domainEnd > payload.domainStart ? payload.domainEnd : payload.domainStart.addingTimeInterval(1)
+        return payload.domainStart...end
     }
     
     // 🌟 劇的軽量化 1：二分探索（Binary Search）による爆速データ検索 🌟
@@ -120,34 +124,34 @@ struct HealthStyleChart: View {
                 .padding([.horizontal, .top])
             }
             
-            Chart(data) { item in
-                // 平均線の描画
+            Chart {
                 RuleMark(y: .value("全体平均", totalAverage))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     .foregroundStyle(.secondary.opacity(0.6))
                 
-                let minV = isTemperature ? item.minTemp : item.minHum
-                let maxV = isTemperature ? item.maxTemp : item.maxHum
-                let avgV = isTemperature ? item.avgTemp : item.avgHum
-                
-                if range == .day {
-                    // 🌟 劇的軽量化 2：点ではなく「滑らかな線とグラデーション」による一括描画 🌟
-                    // 1万件のデータがあっても、「1つの図形」として処理されるため負荷が実質ゼロになります
-                    LineMark(x: .value("時間", item.date), y: .value(title, avgV))
-                        .foregroundStyle(color)
-                        .interpolationMethod(.monotone) // ヘルスケアのような滑らかな曲線
+                ForEach(data) { item in
+                    let minV = isTemperature ? item.minTemp : item.minHum
+                    let maxV = isTemperature ? item.maxTemp : item.maxHum
+                    let avgV = isTemperature ? item.avgTemp : item.avgHum
                     
-                    AreaMark(x: .value("時間", item.date), y: .value(title, avgV))
-                        .foregroundStyle(LinearGradient(colors: [color.opacity(0.2), .clear], startPoint: .top, endPoint: .bottom))
-                        .interpolationMethod(.monotone)
-                } else {
-                    BarMark(x: .value("期間", item.date), yStart: .value("低", minV), yEnd: .value("高", maxV))
-                        .foregroundStyle(color.gradient)
-                        .cornerRadius(4) // Capsuleの代わりに軽量な角丸を使用
+                    if range == .day {
+                        LineMark(x: .value("時間", item.date), y: .value(title, avgV))
+                            .foregroundStyle(color)
+                            .interpolationMethod(.monotone)
+                        
+                        AreaMark(x: .value("時間", item.date), y: .value(title, avgV))
+                            .foregroundStyle(LinearGradient(colors: [color.opacity(0.2), .clear], startPoint: .top, endPoint: .bottom))
+                            .interpolationMethod(.monotone)
+                    } else {
+                        BarMark(x: .value("期間", item.date), yStart: .value("低", minV), yEnd: .value("高", maxV))
+                            .foregroundStyle(color.gradient)
+                            .cornerRadius(4)
+                    }
                 }
             }
             .chartXSelection(value: $selectedDate)
             .chartScrollableAxes(.horizontal)
+            .chartXScale(domain: xDomain)
             .chartScrollPosition(initialX: data.last?.date ?? Date())
             .chartXVisibleDomain(length: range.seconds * (range == .day ? 24 : range == .week ? 7 : range == .month ? 30 : range == .sixMonths ? 26 : 12))
             .chartXAxis {

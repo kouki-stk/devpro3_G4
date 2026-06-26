@@ -38,6 +38,16 @@ public struct StatData: Identifiable, Equatable, @unchecked Sendable {
     public let minHum: Double, maxHum: Double, avgHum: Double
 }
 
+public struct GraphChartPayload: Equatable, @unchecked Sendable {
+    public let data: [StatData]
+    public let temperatureAverage: Double
+    public let humidityAverage: Double
+    public let domainStart: Date
+    public let domainEnd: Date
+    
+    public static let empty = GraphChartPayload(data: [], temperatureAverage: 0, humidityAverage: 0, domainStart: Date(), domainEnd: Date())
+}
+
 @MainActor
 public class SensorDataViewModel: ObservableObject {
     @Published public var allRawData: [SensorData] = []
@@ -46,48 +56,40 @@ public class SensorDataViewModel: ObservableObject {
     @Published public var statsMonth: [StatData] = []
     @Published public var statsSixMonths: [StatData] = []
     @Published public var statsYear: [StatData] = []
+    @Published private var chartPayloads: [GraphRange: GraphChartPayload] = [:]
     @Published public var isCalculatingStats: Bool = false
     @Published public var isDataLoaded: Bool = false
     
+    private let initialDataLimit = 1000
+    private let maxChartPoints = 900
     private var currentActivity: Activity<SensorActivityAttributes>?
+    private var backgroundStatsTask: Task<Void, Never>?
     
     public func startFetching() async {
+        backgroundStatsTask?.cancel()
         guard let savedIP = UserDefaults.standard.string(forKey: "saved_flask_ip"), !savedIP.isEmpty else { return }
         guard let url = URL(string: "http://\(savedIP):5001/api/data") else { return }
         
         self.isCalculatingStats = true
+        self.isDataLoaded = false
+        
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .custom { decoder in
-                let container = try decoder.singleValueContainer()
-                let dateString = try container.decode(String.self)
-                let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-                if let date = formatter.date(from: dateString) { return date }
-                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Date")
-            }
-            let fetched = try decoder.decode([SensorData].self, from: data).sorted { $0.timestamp < $1.timestamp }
-            
-            self.allRawData = fetched
-            let cal = Calendar.current
-            
-            let results = await Task.detached(priority: .userInitiated) {
-                return (
-                    SensorDataViewModel.aggregate(.day, fetched, cal),
-                    SensorDataViewModel.aggregate(.week, fetched, cal),
-                    SensorDataViewModel.aggregate(.month, fetched, cal),
-                    SensorDataViewModel.aggregate(.sixMonths, fetched, cal),
-                    SensorDataViewModel.aggregate(.year, fetched, cal)
-                )
+            let fetched = try await Task.detached(priority: .userInitiated) {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .custom { decoder in
+                    let container = try decoder.singleValueContainer()
+                    let dateString = try container.decode(String.self)
+                    let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                    if let date = formatter.date(from: dateString) { return date }
+                    throw DecodingError.dataCorruptedError(in: container, debugDescription: "Date")
+                }
+                return try decoder.decode([SensorData].self, from: data).sorted { $0.timestamp < $1.timestamp }
             }.value
             
-            self.statsDay = results.0
-            self.statsWeek = results.1
-            self.statsMonth = results.2
-            self.statsSixMonths = results.3
-            self.statsYear = results.4
-            
-            self.isCalculatingStats = false
+            let initialData = Array(fetched.suffix(initialDataLimit))
+            let initialResults = await Self.makeStats(from: initialData, maxChartPoints: maxChartPoints, priority: .userInitiated)
+            apply(data: initialData, stats: initialResults)
             self.isDataLoaded = true
             
             if let latestData = fetched.last {
@@ -96,11 +98,105 @@ public class SensorDataViewModel: ObservableObject {
             
             WidgetCenter.shared.reloadAllTimelines()
             
+            guard fetched.count > initialData.count else {
+                self.isCalculatingStats = false
+                return
+            }
+            
+            backgroundStatsTask = Task { [weak self] in
+                let fullResults = await Self.makeStats(from: fetched, maxChartPoints: self?.maxChartPoints ?? 900, priority: .background)
+                guard !Task.isCancelled else { return }
+                self?.apply(data: fetched, stats: fullResults)
+                self?.isCalculatingStats = false
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            
         } catch {
             print("Fetch error: \(error)")
             self.isCalculatingStats = false
             self.isDataLoaded = false
         }
+    }
+    
+    private typealias StatsResult = (
+        day: [StatData],
+        week: [StatData],
+        month: [StatData],
+        sixMonths: [StatData],
+        year: [StatData],
+        chartPayloads: [GraphRange: GraphChartPayload]
+    )
+    
+    nonisolated private static func makeStats(from data: [SensorData], maxChartPoints: Int, priority: TaskPriority) async -> StatsResult {
+        let cal = Calendar.current
+        return await Task.detached(priority: priority) {
+            let day = SensorDataViewModel.aggregate(.day, data, cal)
+            let week = SensorDataViewModel.aggregate(.week, data, cal)
+            let month = SensorDataViewModel.aggregate(.month, data, cal)
+            let sixMonths = SensorDataViewModel.aggregate(.sixMonths, data, cal)
+            let year = SensorDataViewModel.aggregate(.year, data, cal)
+            let payloads: [GraphRange: GraphChartPayload] = [
+                .day: SensorDataViewModel.makeChartPayload(from: day, maxPointCount: maxChartPoints),
+                .week: SensorDataViewModel.makeChartPayload(from: week, maxPointCount: maxChartPoints),
+                .month: SensorDataViewModel.makeChartPayload(from: month, maxPointCount: maxChartPoints),
+                .sixMonths: SensorDataViewModel.makeChartPayload(from: sixMonths, maxPointCount: maxChartPoints),
+                .year: SensorDataViewModel.makeChartPayload(from: year, maxPointCount: maxChartPoints)
+            ]
+            return (day, week, month, sixMonths, year, payloads)
+        }.value
+    }
+    
+    private func apply(data: [SensorData], stats: StatsResult) {
+        self.allRawData = data
+        self.statsDay = stats.day
+        self.statsWeek = stats.week
+        self.statsMonth = stats.month
+        self.statsSixMonths = stats.sixMonths
+        self.statsYear = stats.year
+        self.chartPayloads = stats.chartPayloads
+    }
+    
+    nonisolated private static func makeChartPayload(from data: [StatData], maxPointCount: Int) -> GraphChartPayload {
+        guard let first = data.first, let last = data.last else {
+            let now = Date()
+            return GraphChartPayload(data: [], temperatureAverage: 0, humidityAverage: 0, domainStart: now, domainEnd: now)
+        }
+        let temperatureAverage = average(data.map(\.avgTemp))
+        let humidityAverage = average(data.map(\.avgHum))
+        let sampledData = downsample(data, maxPointCount: maxPointCount)
+        return GraphChartPayload(
+            data: sampledData,
+            temperatureAverage: temperatureAverage,
+            humidityAverage: humidityAverage,
+            domainStart: first.date,
+            domainEnd: last.date
+        )
+    }
+    
+    nonisolated private static func downsample(_ data: [StatData], maxPointCount: Int) -> [StatData] {
+        guard maxPointCount > 2, data.count > maxPointCount else { return data }
+        let step = Double(data.count - 1) / Double(maxPointCount - 1)
+        var sampled: [StatData] = []
+        sampled.reserveCapacity(maxPointCount)
+        var lastIndex = -1
+        
+        for pointIndex in 0..<maxPointCount {
+            let sourceIndex = min(data.count - 1, Int((Double(pointIndex) * step).rounded()))
+            if sourceIndex != lastIndex {
+                sampled.append(data[sourceIndex])
+                lastIndex = sourceIndex
+            }
+        }
+        
+        if sampled.last?.date != data.last?.date {
+            sampled.append(data[data.count - 1])
+        }
+        return sampled
+    }
+    
+    nonisolated private static func average(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return values.reduce(0, +) / Double(values.count)
     }
     
     private func updateLiveActivity(latest: SensorData) {
@@ -132,5 +228,9 @@ public class SensorDataViewModel: ObservableObject {
     
     public func getStats(for range: GraphRange) -> [StatData] {
         switch range { case .day: return statsDay; case .week: return statsWeek; case .month: return statsMonth; case .sixMonths: return statsSixMonths; case .year: return statsYear }
+    }
+    
+    public func getChartPayload(for range: GraphRange) -> GraphChartPayload {
+        chartPayloads[range] ?? .empty
     }
 }

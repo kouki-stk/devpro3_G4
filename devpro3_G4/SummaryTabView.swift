@@ -7,12 +7,14 @@
 
 import SwiftUI
 import CoreImage.CIFilterBuiltins
+import LocalAuthentication
 
 struct SummaryTabView: View {
     @ObservedObject var viewModel: SensorDataViewModel
     
     // QRコード画面を表示するためのフラグ
     @State private var showQRSheet = false
+    @State private var qrAuthErrorMessage: String?
     
     // 本日の最高・最低を計算
     private var todayHighLow: (maxT: Double, minT: Double, maxH: Double, minH: Double)? {
@@ -91,7 +93,7 @@ struct SummaryTabView: View {
             // ナビゲーションバーの右上にボタンを配置
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: { showQRSheet = true }) {
+                    Button(action: authenticateForServerQR) {
                         HStack(spacing: 4) {
                             Image(systemName: "qrcode")
                             Text("サーバーQR")
@@ -104,6 +106,34 @@ struct SummaryTabView: View {
             // ボタンを押した時に下からQRコード画面を出す
             .sheet(isPresented: $showQRSheet) {
                 ServerQRSheetView()
+            }
+            .alert("認証が必要です", isPresented: Binding(
+                get: { qrAuthErrorMessage != nil },
+                set: { if !$0 { qrAuthErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(qrAuthErrorMessage ?? "")
+            }
+        }
+    }
+    
+    private func authenticateForServerQR() {
+        let context = LAContext()
+        var authError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError) else {
+            qrAuthErrorMessage = "Face ID / Touch IDを有効にするとサーバーQRを表示できます"
+            return
+        }
+        
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "サーバーQRを表示します") { success, _ in
+            DispatchQueue.main.async {
+                if success {
+                    qrAuthErrorMessage = nil
+                    showQRSheet = true
+                } else {
+                    qrAuthErrorMessage = "Face ID / Touch IDで認証できませんでした"
+                }
             }
         }
     }
@@ -179,7 +209,7 @@ struct ServerQRSheetView: View {
                     }
                     
                     // QRコードの表示
-                    Image(uiImage: generateQRCode(from: savedIP))
+                    Image(uiImage: generateQRCode(from: QRCrypto.encryptIP(savedIP)))
                         .interpolation(.none)
                         .resizable()
                         .scaledToFit()
